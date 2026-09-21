@@ -5,7 +5,7 @@ ships the hook configuration
 [tmux-claude-hatch](https://github.com/craftzdog/tmux-claude-hatch)
 wants, so you don't have to paste JSON into `~/.claude/settings.json`.
 
-It does two things:
+It does three things:
 
 - **Rings the terminal bell** when an agent ends a turn, asks for permission, or
   asks you a question — the three moments the picker calls `idle` and `waiting`.
@@ -15,6 +15,11 @@ It does two things:
   start/end and prompt submit. The picker paints from cache for a fast startup,
   so without this the first frame can be stale — showing `working` for an agent
   that has been waiting on you.
+- **Adds a `message-session` skill** so an agent can send a message to another
+  Claude Code session in a tmux pane — the target `ctrl-y` copies in the picker —
+  and reply to messages that arrive that way. The skill's `send.sh` pastes the
+  text as one bracketed paste, submits with a separate Enter, and refuses to type
+  into an agent that is `waiting` on a permission or question dialog.
 
 ## Install
 

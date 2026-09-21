@@ -41,6 +41,9 @@ Simple by design: it's just a few shell scripts.
 - **Quick kill** (`ctrl-x`) of a finished agent from the picker.
 - **Copy location** (`ctrl-y`) — puts an agent's `session:window.pane` target
   on the clipboard, ready for `tmux send-keys -t` and friends.
+- **Agent-to-agent messages** — the Claude Code plugin adds a `message-session`
+  skill: paste a target into an agent's prompt and it can send a message to that
+  session and read the reply, with no MCP server in between.
 - **Bell forwarding** — a bell in a dedicated session highlights the window
   you launched it from, so you notice even without opening the picker
   ([one-time Claude Code setup](#making-claude-ring-the-bell)).
@@ -86,6 +89,9 @@ configuration this plugin wants, so you don't have to hand-edit
   start/end and prompt submit. The picker paints from cache for a fast startup,
   so without this the first frame can be stale — showing `working` for an agent
   that has been waiting on you.
+- **Adds a `message-session` skill** — an agent can message another Claude Code
+  session by its `ctrl-y` target and reply to messages sent that way, without
+  hitting a permission or question dialog by accident.
 
 ```
 /plugin marketplace add craftzdog/tmux-claude-hatch
