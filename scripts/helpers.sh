@@ -58,6 +58,52 @@ claude_transcript_mtime() {
   done
 }
 
+# cache_path <name>
+# A scratch file, e.g. `cache_path cloud.json`, in a directory only this user can
+# open: the caches hold cloud transcripts, and $TMPDIR is often a shared /tmp.
+# Fails, printing nothing, if someone else got to the directory first.
+cache_path() {
+  local dir="${TMPDIR:-/tmp}/tmux-claude-$UID"
+  [ -d "$dir" ] || mkdir -m 700 "$dir" 2>/dev/null
+  [ -O "$dir" ] && [ ! -L "$dir" ] || return 1
+  printf '%s/%s' "$dir" "$1"
+}
+
+# write_atomic <path>
+# Writes stdin to <path> via a temp file, so a reader never sees it half-written.
+# On failure <path> is left as it was.
+write_atomic() {
+  [ -n "$1" ] || { cat >/dev/null; return 1; }
+  cat >"$1.$$" 2>/dev/null && mv -f "$1.$$" "$1" 2>/dev/null || { rm -f "$1.$$"; return 1; }
+}
+
+# cloud_url <session-id>
+cloud_url() {
+  printf 'https://claude.ai/code/%s' "$1"
+}
+
+# open_url <url>
+# Opens <url> in the default browser. The popup's processes are killed the
+# moment it closes, so on Linux the opener is started in a session of its own,
+# and only once that session exists does this return: `setsid -f` returns before
+# its child has left, so it can still be caught. xdg-open is started in the
+# background there, since it can block until the browser exits. macOS's `open`
+# returns once it has handed the URL on, so it simply runs.
+open_url() {
+  local tool
+  # xdg-open first: on Linux, `open` is often openvt.
+  for tool in xdg-open open; do
+    command -v "$tool" >/dev/null 2>&1 || continue
+    if command -v setsid >/dev/null 2>&1; then
+      setsid -w sh -c '"$1" "$2" >/dev/null 2>&1 &' _ "$tool" "$1" </dev/null >/dev/null 2>&1
+    else
+      "$tool" "$1" >/dev/null 2>&1
+    fi
+    return 0
+  done
+  return 1
+}
+
 # copy_to_clipboard <text>
 # Puts <text> in a tmux paste buffer and on the system clipboard. A native tool
 # is preferred; without one, `set-buffer -w` hands it to the outer terminal via
