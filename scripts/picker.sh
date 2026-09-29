@@ -4,30 +4,36 @@
 #   picker.sh           fzf picker; on enter, jumps to the chosen agent.
 #   picker.sh --list    print the rows and refresh the cache (used by fzf's
 #                       async initial load and by the ctrl-x reload).
-#   picker.sh --copy <text>
-#                       copy <text> to the clipboard (used by ctrl-y).
-#   picker.sh --preview <pane>
-#                       capture <pane> without its trailing blank lines, which
-#                       would otherwise leave fzf's `follow` scrolled onto padding.
+#   picker.sh --copy <kind> <id> <loc>
+#                       copy the row's location, or a cloud session's URL, to the
+#                       clipboard (used by ctrl-y).
+#   picker.sh --preview <id> <kind>
+#                       capture the pane <id> without its trailing blank lines,
+#                       which would otherwise leave fzf's `follow` scrolled onto
+#                       padding; or describe the cloud session <id> and show its
+#                       latest turns.
 #
 # Rows come from agents.sh, which pairs each running Claude with the tmux pane it
-# occupies. Two kinds of row jump differently:
+# occupies. Three kinds of row jump differently:
 #   dedicated  a Claude in a `claude-*` session this plugin launched — resumed in
 #              the popup, over the window it was launched from.
 #   loose      a Claude running in any other pane — focused in place.
+#   cloud      a claude.ai/code session — opened in the browser.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
 
-cache="${TMPDIR:-/tmp}/tmux-claude-agents-$(id -u).cache"
+cache="$(cache_path agents.cache)"
 
 if [ "${1:-}" = '--list' ]; then
-  tmp="$cache.$$"
-  "$DIR/agents.sh" >"$tmp" 2>/dev/null
-  mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp"
+  "$DIR/agents.sh" 2>/dev/null | write_atomic "$cache"
   cat "$cache" 2>/dev/null
   exit 0
+fi
+
+if [ "${1:-}" = '--preview' ] && [ "${3:-}" = cloud ]; then
+  exec "$DIR/cloud.sh" --preview "${2:-}"
 fi
 
 if [ "${1:-}" = '--preview' ]; then
@@ -42,8 +48,10 @@ if [ "${1:-}" = '--preview' ]; then
 fi
 
 if [ "${1:-}" = '--copy' ]; then
-  copy_to_clipboard "${2:-}" &&
-    tmux display-message "tmux-claude-hatch: copied ${2:-}"
+  text="${4:-}"
+  [ "${2:-}" = cloud ] && text="$(cloud_url "${3:-}")"
+  copy_to_clipboard "$text" &&
+    tmux display-message "tmux-claude-hatch: copied $text"
   exit 0
 fi
 
@@ -76,23 +84,42 @@ if [ "$(get_tmux_option @claude_picker_cache 'on')" = on ] &&
   sync_opts=(--bind "load:unbind(load)+reload-sync($self --list)")
 fi
 
+# On cloud rows only, the session's details and link label the preview's bottom
+# border, between the conversation and the list, and the preview wraps: a
+# captured pane is already laid out for its width, but a cloud transcript is not.
+# `transform` needs fzf 0.45. `focus` misses the first row when the list first
+# loads, so `result` runs it too.
+cloud_opts=()
+if [ "$(get_tmux_option @claude_cloud 'off')" = on ]; then
+  on_row="transform[test {4} = cloud && echo 'change-preview-window(wrap)' || echo 'change-preview-window(nowrap)']+transform-preview-label(test {4} = cloud && $DIR/cloud.sh --label {2})"
+  cloud_opts=(--preview-label-pos=2:bottom --bind "focus:$on_row" --bind "result:$on_row")
+fi
+
 # ctrl-x kills the Claude process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
 # beat so the process is gone by the time agents.sh looks for it.
-# ctrl-y copies the agent's location (session:window.pane, e.g. claude-88074b0e:0.0)
-# and closes the picker.
+# A cloud row has no pid, so nothing to kill.
+# ctrl-y copies the agent's location (session:window.pane, e.g. claude-88074b0e:0.0),
+# or a cloud session's URL, and closes the picker.
 sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8 \
   --reverse --cycle --header='Claude agents · enter: jump · ctrl-x: kill · ctrl-y: copy' \
-  --preview="$self --preview {2}" --preview-window='up,70%,follow' \
-  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $self --list)" \
-  --bind="ctrl-y:execute-silent($self --copy {7})+abort" \
+  --preview="$self --preview {2} {4}" --preview-window='up,70%,follow' \
+  --bind="ctrl-x:execute-silent([ -z {3} ] || kill {3})+reload(sleep 0.3; $self --list)" \
+  --bind="ctrl-y:execute-silent($self --copy {4} {2} {7})+abort" \
   --bind='change:first' \
   ${sync_opts[@]+"${sync_opts[@]}"} \
+  ${cloud_opts[@]+"${cloud_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
 
 [ -z "$sel" ] && exit 0
 pane=$(printf '%s' "$sel" | cut -f2)
 kind=$(printf '%s' "$sel" | cut -f4)
+
+if [ "$kind" = cloud ]; then
+  url="$(cloud_url "$pane")"
+  open_url "$url" || tmux display-message "tmux-claude-hatch: no open or xdg-open to open $url"
+  exit 0
+fi
 
 parent=$(tmux show-options -gqv @claude_parent 2>/dev/null)
 session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Emit one picker row per running Claude that lives in a tmux pane.
+# Emit one picker row per running Claude that lives in a tmux pane, plus one per
+# cloud session when @claude_cloud is on (see cloud.sh).
 #
 # Claude self-reports its status: each session writes its own state to disk. We
 # read those files, falling back to `claude agents --json`. So this needs no
@@ -10,8 +11,9 @@
 # is what lets several Claudes in one project (same cwd, same session, different
 # windows) each get a row of their own.
 #
-#   Row: rank \t pane_id \t pid \t kind \t icon \t age \t loc \t path
-#   rank/pane_id/pid/kind are hidden from the display via fzf's --with-nth.
+#   Row: rank \t target \t pid \t kind \t icon \t age \t loc \t path
+#   rank/target/pid/kind are hidden from the display via fzf's --with-nth. The
+#   target is a tmux pane id, or a cloud session id; pid is empty for the cloud.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
@@ -66,7 +68,7 @@ proc_starts() {
 # pid may since have been recycled, so a rec counts only while that pid still has
 # the start time the file recorded: `ps lstart` in UTC, or /proc on Linux. A rec
 # missing a field, or not one pid verified, means the format moved on: fail, so
-# the caller falls back to the CLI.
+# the caller falls back to the CLI. Emits the records format() takes.
 render() {
   {
     # Rejoining the fields with single spaces undoes the padding of a
@@ -76,7 +78,7 @@ render() {
     [ -r /proc/self/stat ] && proc_starts "$1"
     tmux list-panes -a -F $'T\t#{pane_tty}\t#{pane_id}\t#{session_name}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null
     printf '%s\n' "$1" | sed $'s/^/A\t/'
-  } | awk -F'\t' -v verify="$2" -v now="$(date +%s)" -v home="$HOME" \
+  } | awk -F'\t' -v OFS='\t' -v verify="$2" -v home="$HOME" \
     -v prefix="$(get_tmux_option @claude_session_prefix 'claude-')" '
     $1 == "P" { tty_of[$2] = $3; start[$2] = $4; next }
     $1 == "S" { start[$2] = $3; next }
@@ -92,29 +94,51 @@ render() {
       tty = tty_of[$2]
       if (tty == "" || !(tty in pane)) next   # this Claude is not running inside tmux
 
-      if      ($3 == "waiting") { icon = "\033[33m●\033[0m waiting"; rank = 0 }  # yellow - needs input
-      else if ($3 == "idle")    { icon = "\033[32m●\033[0m idle   "; rank = 1 }  # green  - done, your turn
-      else if ($3 == "busy")    { icon = "\033[31m●\033[0m working"; rank = 3 }  # red    - busy, leave it
-      else                      { icon = "\033[90m●\033[0m   ?    "; rank = 2 }  # grey   - unrecognised status
-
-      secs = ($6 != "") ? now - $6 : 1e12   # unknown activity sorts last
-      mins = int(secs / 60)
-      if      ($6 == "")    age = "-"
-      else if (mins < 60)   age = mins "m"
-      else if (mins < 2880) age = int(mins / 60) "h"
-      else                  age = int(mins / 1440) "d"
       kind = (index(sess[tty], prefix) == 1) ? "dedicated" : "loose"
 
       path = $5
       if (index(path, home) == 1) path = "~" substr(path, length(home) + 1)
 
-      printf "%d\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n",
-        secs, rank, pane[tty], $2, kind, icon, age, loc[tty], path
+      print $3, pane[tty], $2, kind, $6, loc[tty], path
     }
     END { exit (bad || !live) }
-  ' | sort -t$'\t' $sort_keys | cut -f2-
-  # The age column mixes units ("5m", "3h", "2d"), so the sort runs on a leading
-  # seconds column, cut off once it has served.
+  '
+}
+
+# format
+# Turns records from both sources into rows.
+#
+#   Rec: status \t target \t pid \t kind \t seen-at \t loc \t path
+#
+# The age column mixes units ("5m", "3h", "2d"), so each row leads with a seconds
+# column for the sort, cut off by pad().
+format() {
+  awk -F'\t' -v OFS='\t' -v now="$(date +%s)" '{
+    if      ($1 == "waiting") { icon = "\033[33m●\033[0m waiting"; rank = 0 }  # yellow - needs input
+    else if ($1 == "idle")    { icon = "\033[32m●\033[0m idle   "; rank = 1 }  # green  - done, your turn
+    else if ($1 == "busy")    { icon = "\033[31m●\033[0m working"; rank = 3 }  # red    - busy, leave it
+    else                      { icon = "\033[90m●\033[0m   ?    "; rank = 2 }  # grey   - unrecognised status
+
+    secs = ($5 != "") ? now - $5 : 1e12   # unknown activity sorts last
+    mins = int(secs / 60)
+    if      ($5 == "")    age = "-"
+    else if (mins < 60)   age = mins "m"
+    else if (mins < 2880) age = int(mins / 60) "h"
+    else                  age = int(mins / 1440) "d"
+
+    printf "%d\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n", secs, rank, $2, $3, $4, icon, age, $6, $7
+  }'
+}
+
+# pad
+# Drops the sort column. fzf expands tabs to 8-column stops, so locations of
+# different lengths (`main:1.2` beside `claude-88074b0e:0.0`, or `cloud`) would
+# push the path out of line; each is padded to the widest one instead. fzf strips
+# the padding from {7}.
+pad() {
+  awk -F'\t' -v OFS='\t' '
+    { sub(/^[^\t]*\t/, ""); row[NR] = $0; if (length($7) > w) w = length($7) }
+    END { for (i = 1; i <= NR; i++) { $0 = row[i]; $7 = sprintf("%-" w "s", $7); print } }'
 }
 
 # status: rank asc (what needs you floats up), then age asc so whatever just went
@@ -125,7 +149,15 @@ else
   sort_keys='-k2,2n -k1,1n'
 fi
 
+# Cloud sessions are fetched over the network, alongside the local lookup.
+exec 3</dev/null
+[ "$(get_tmux_option @claude_cloud 'off')" = on ] && exec 3< <("$DIR/cloud.sh" 2>/dev/null)
+
 { recs="$(session_recs)" && out="$(render "$recs" 1)"; } ||
-  { recs="$(cli_recs)" && out="$(render "$recs" '')"; } || exit 0
-[ -n "$out" ] && printf '%s\n' "$out"
+  { recs="$(cli_recs)" && out="$(render "$recs" '')"; } || out=''
+
+{
+  [ -n "$out" ] && printf '%s\n' "$out"
+  cat <&3
+} | format | sort -t$'\t' $sort_keys | pad
 exit 0

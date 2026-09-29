@@ -109,7 +109,7 @@ Inside the picker:
 
 | Key                       | Action                                                                       |
 | ------------------------- | ---------------------------------------------------------------------------- |
-| `enter`                   | Jump to the agent                                                            |
+| `enter`                   | Jump to the agent (a cloud session opens in the browser)                     |
 | `ctrl-x`                  | Kill the highlighted agent                                                   |
 | `ctrl-y`                  | Copy the highlighted agent's location (e.g. `claude-88074b0e:0.0`) and close |
 | `↑` / `↓`, type to filter | fzf navigation                                                               |
@@ -137,6 +137,9 @@ set -g @claude_fzf_options    ''         # extra options passed to the fzf picke
 set -g @claude_picker_cache   'on'       # paint the picker's first frame from a cache
 set -g @claude_sort           'status'   # picker order: 'status' or 'recent'
 set -g @claude_forward_bell   'on'       # highlight the origin window on a bell
+set -g @claude_cloud          'off'      # also list claude.ai/code cloud sessions
+set -g @claude_cloud_max_age  '24'       # hide cloud sessions idle longer (hours)
+set -g @claude_cloud_timeout  '5'        # seconds to wait for the cloud session list
 ```
 
 For example, to skip permission prompts in launched sessions:
@@ -144,6 +147,23 @@ For example, to skip permission prompts in launched sessions:
 ```tmux
 set -g @claude_args '--dangerously-skip-permissions'
 ```
+
+### Cloud sessions
+
+With `@claude_cloud 'on'`, the picker also lists your
+[cloud sessions](https://code.claude.com/docs/en/claude-code-on-the-web), with
+the same `waiting` / `idle` / `working` status. The preview shows each session's
+latest turns: your prompts, Claude's replies and each tool call with the first
+line of its result, or an edit's diff, with the session's title, repository and
+link along its bottom edge. `enter` opens the session on claude.ai; `ctrl-y`
+copies its URL. Archived sessions are left out.
+
+It needs `curl`, fzf ≥ 0.45 and a claude.ai login (`claude auth login`). The picker signs in
+with the OAuth token Claude Code stores (in `~/.claude/.credentials.json`, or the
+macOS login keychain) and reads the endpoints `claude --teleport` lists sessions
+and their history from. They are undocumented and may change; when they fail, or
+the token has expired, cloud rows are simply missing until the next `claude` run
+refreshes the token.
 
 ## Manual installation
 
