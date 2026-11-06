@@ -5,13 +5,19 @@
 #   picker.sh --list    print the rows and refresh the cache (used by fzf's
 #                       async initial load and by the ctrl-x reload).
 #   picker.sh --copy <text>
-#                       copy <text> to the clipboard (used by ctrl-y).
+#                       copy <text>, minus its column padding, to the clipboard
+#                       (used by ctrl-y).
+#   picker.sh --fallback
+#                       fzf `result` hook: when the query matches no session name,
+#                       widen the search to the path (reads FZF_QUERY,
+#                       FZF_MATCH_COUNT and FZF_NTH).
 #   picker.sh --preview <pane>
 #                       capture <pane> without its trailing blank lines, which
 #                       would otherwise leave fzf's `follow` scrolled onto padding.
 #
 # Rows come from agents.sh, which pairs each running Claude with the tmux pane it
-# occupies. Two kinds of row jump differently:
+# occupies; its first line is the column header (fzf --header-lines). Two kinds
+# of row jump differently:
 #   dedicated  a Claude in a `claude-*` session this plugin launched — resumed in
 #              the popup, over the window it was launched from.
 #   loose      a Claude running in any other pane — focused in place.
@@ -21,6 +27,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/helpers.sh"
 
 cache="${TMPDIR:-/tmp}/tmux-claude-agents-$(id -u).cache"
+
+# Searchable columns, numbered within the displayed fields (--with-nth=5..9:
+# name, status, last active, tmux session, path).
+NTH_NAME=1
+NTH_PATH=5
 
 if [ "${1:-}" = '--list' ]; then
   tmp="$cache.$$"
@@ -41,9 +52,17 @@ if [ "${1:-}" = '--preview' ]; then
   exit 0
 fi
 
+if [ "${1:-}" = '--fallback' ]; then
+  [ -n "${FZF_QUERY:-}" ] && [ "${FZF_MATCH_COUNT:-1}" -eq 0 ] &&
+    [ "${FZF_NTH:-}" = "$NTH_NAME" ] && printf 'change-nth(%s)' "$NTH_PATH"
+  exit 0
+fi
+
 if [ "${1:-}" = '--copy' ]; then
-  copy_to_clipboard "${2:-}" &&
-    tmux display-message "tmux-claude-hatch: copied ${2:-}"
+  text="${2:-}"
+  text="${text%"${text##*[![:space:]]}"}"
+  copy_to_clipboard "$text" &&
+    tmux display-message "tmux-claude-hatch: copied $text"
   exit 0
 fi
 
@@ -76,17 +95,29 @@ if [ "$(get_tmux_option @claude_picker_cache 'on')" = on ] &&
   sync_opts=(--bind "load:unbind(load)+reload-sync($self --list)")
 fi
 
+# Typing filters by session name. When nothing matches, the search falls back to
+# the path; editing the query goes back to names. That needs change-nth (fzf
+# 0.56+); older fzf just searches name and path together.
+fzf_ver=$(fzf --version 2>/dev/null | awk '{ print $1 }')
+if [ "$(printf '%s\n0.56\n' "$fzf_ver" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" = 0.56 ]; then
+  search_opts=(--nth="$NTH_NAME"
+    --bind="change:first+change-nth($NTH_NAME)"
+    --bind="result:transform($self --fallback)")
+else
+  search_opts=(--nth="$NTH_NAME,$NTH_PATH" --bind='change:first')
+fi
+
 # ctrl-x kills the Claude process itself: a dedicated session dies with its last
 # window, while a loose pane keeps the shell that hosted it. The reload waits a
 # beat so the process is gone by the time agents.sh looks for it.
 # ctrl-y copies the agent's location (session:window.pane, e.g. claude-88074b0e:0.0)
 # and closes the picker.
-sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8 \
-  --reverse --cycle --header='Claude agents · enter: jump · ctrl-x: kill · ctrl-y: copy' \
+sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8,9 --header-lines=1 \
+  --reverse --cycle --header='Claude agents · type: name, then path · enter: jump · ctrl-x: kill · ctrl-y: copy' \
   --preview="$self --preview {2}" --preview-window='up,70%,follow' \
   --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $self --list)" \
-  --bind="ctrl-y:execute-silent($self --copy {7})+abort" \
-  --bind='change:first' \
+  --bind="ctrl-y:execute-silent($self --copy {8})+abort" \
+  "${search_opts[@]}" \
   ${sync_opts[@]+"${sync_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
 

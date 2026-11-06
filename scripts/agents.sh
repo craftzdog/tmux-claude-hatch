@@ -10,8 +10,15 @@
 # is what lets several Claudes in one project (same cwd, same session, different
 # windows) each get a row of their own.
 #
-#   Row: rank \t pane_id \t pid \t kind \t icon \t age \t loc \t path
-#   rank/pane_id/pid/kind are hidden from the display via fzf's --with-nth.
+#   Row: rank \t pane_id \t pid \t kind \t name \t icon \t age \t loc \t path
+#   rank/pane_id/pid/kind are hidden from the display via fzf's --with-nth; the
+#   rest show as the Name, Status, Last active, Tmux session and Path columns.
+#   name is the Claude session name (set with /rename, otherwise derived by
+#   Claude), or '-' when there is none.
+#
+# The first line is a column header (kind "header") for fzf's --header-lines.
+# Every column but the last is padded to its widest cell, header included, so
+# the labels line up with the rows.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
@@ -22,14 +29,14 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # feeds the age column. The files are an internal Claude Code detail, so a missing
 # directory or a file caught mid-write fails this, and the caller asks the CLI.
 #
-#   Rec: pid \t status \t session-id \t cwd \t seen-at \t proc-start
+#   Rec: pid \t status \t session-id \t cwd \t seen-at \t proc-start \t name
 session_recs() {
   local files
   files=("${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/sessions/*.json)
   [ -f "${files[0]}" ] || return 1
   jq -r 'select(.kind == "interactive")
     | ((.statusUpdatedAt // .updatedAt) as $t | if $t then ($t / 1000 | floor) else "" end) as $seen
-    | [.pid, .status, .sessionId, .cwd, $seen, .procStart] | @tsv' "${files[@]}" 2>/dev/null
+    | [.pid, .status, .sessionId, .cwd, $seen, .procStart, (.name // "")] | @tsv' "${files[@]}" 2>/dev/null
 }
 
 # cli_recs
@@ -38,9 +45,9 @@ session_recs() {
 # transcript's mtime stands in for it.
 cli_recs() {
   $(get_tmux_option @claude_command 'claude') agents --json 2>/dev/null |
-    jq -r '.[] | select(.kind == "interactive") | [.pid, .status, .sessionId, .cwd] | @tsv' 2>/dev/null |
-    while IFS=$'\t' read -r pid status sid cwd; do
-      printf '%s\t%s\t%s\t%s\t%s\t\n' "$pid" "$status" "$sid" "$cwd" "$(claude_transcript_mtime "$sid")"
+    jq -r '.[] | select(.kind == "interactive") | [.pid, .status, .sessionId, .cwd, (.name // "")] | @tsv' 2>/dev/null |
+    while IFS=$'\t' read -r pid status sid cwd name; do
+      printf '%s\t%s\t%s\t%s\t%s\t\t%s\n' "$pid" "$status" "$sid" "$cwd" "$(claude_transcript_mtime "$sid")" "$name"
     done
 }
 
@@ -100,20 +107,38 @@ render() {
       secs = ($6 != "") ? now - $6 : 1e12   # unknown activity sorts last
       mins = int(secs / 60)
       if      ($6 == "")    age = "-"
-      else if (mins < 60)   age = mins "m"
-      else if (mins < 2880) age = int(mins / 60) "h"
-      else                  age = int(mins / 1440) "d"
+      else if (mins < 60)   age = mins "m ago"
+      else if (mins < 2880) age = int(mins / 60) "h ago"
+      else                  age = int(mins / 1440) "d ago"
       kind = (index(sess[tty], prefix) == 1) ? "dedicated" : "loose"
 
       path = $5
       if (index(path, home) == 1) path = "~" substr(path, length(home) + 1)
 
-      printf "%d\t%s\t%s\t%s\t%s\t%s\t%5s\t%s\t%s\n",
-        secs, rank, pane[tty], $2, kind, icon, age, loc[tty], path
+      n++
+      key[n] = secs "\t" rank "\t" pane[tty] "\t" $2 "\t" kind
+      st[n] = icon; ag[n] = age; lo[n] = loc[tty]
+      nm[n] = ($8 != "") ? $8 : "-"
+      pa[n] = path
     }
-    END { exit (bad || !live) }
+    END {
+      if (bad || !live) exit 1
+      if (!n) exit 0
+      # Rows are held until here so each column can be padded to its widest cell.
+      # The status cell carries colour codes but always shows 9 characters.
+      wa = length("Last active"); wl = length("Tmux session"); wn = length("Name")
+      for (i = 1; i <= n; i++) {
+        if (length(ag[i]) > wa) wa = length(ag[i])
+        if (length(lo[i]) > wl) wl = length(lo[i])
+        if (length(nm[i]) > wn) wn = length(nm[i])
+      }
+      fmt = "%s\t%-" wn "s\t%-9s\t%-" wa "s\t%-" wl "s\t%s\n"
+      # secs/rank of -1 sort the header above every row in either sort mode.
+      printf fmt, "-1\t-1\t\t\theader", "Name", "Status", "Last active", "Tmux session", "Path"
+      for (i = 1; i <= n; i++) printf fmt, key[i], nm[i], st[i], ag[i], lo[i], pa[i]
+    }
   ' | sort -t$'\t' $sort_keys | cut -f2-
-  # The age column mixes units ("5m", "3h", "2d"), so the sort runs on a leading
+  # The age column mixes units ("5m ago", "3h ago"), so the sort runs on a leading
   # seconds column, cut off once it has served.
 }
 

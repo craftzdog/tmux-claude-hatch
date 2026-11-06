@@ -34,6 +34,11 @@ Simple by design: it's just a few shell scripts.
 - **Live status** per agent — `working` / `waiting` / `idle` — read straight
   from the session files Claude Code keeps, so you instantly see which need you.
   No setup.
+- **Labelled columns** — session name, status, last activity, tmux session name and
+  path, under a header row.
+- **Search by session name** — each row shows the agent's Claude session name
+  (set with `/rename`, otherwise the one Claude derives). Typing filters by
+  name first and falls back to the project path when no name matches.
 - **A live preview** of each agent's screen right in the picker.
 - **Smart jump** — selecting an agent switches your client to the window it
   was launched from, then resumes it in a popup over it.
@@ -113,6 +118,10 @@ Inside the picker:
 | `ctrl-x`                  | Kill the highlighted agent                                                   |
 | `ctrl-y`                  | Copy the highlighted agent's location (e.g. `claude-88074b0e:0.0`) and close |
 | `↑` / `↓`, type to filter | fzf navigation                                                               |
+
+Typing matches the session name. If no name matches, the search widens to the
+project path; edit the query and it goes back to names. (The fallback needs fzf
+0.56+; with older fzf, name and path are searched together.)
 
 Agents needing your attention (`waiting`, `idle`) sort to the top. Set
 `@claude_sort 'recent'` to sort by last activity instead, regardless of status.
