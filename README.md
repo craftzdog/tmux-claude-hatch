@@ -121,6 +121,20 @@ Every running Claude gets its own row — the picker identifies each by its
 process, not by its tmux session. So several agents in one project all show up
 separately, as does a Claude you started by hand in an ordinary pane.
 
+### Split mode
+
+A popup takes every key you press, so `prefix` commands inside it act on the
+agent's own session. With `set -g @claude_display 'split'`, `prefix` + `y`
+instead moves the agent's pane into your current window as a split, so `prefix`
+commands keep acting on your session. Press `prefix` + `y` again from that
+window to send the pane back to its session, where it keeps running. Picking a
+dedicated agent in the picker shows it as a split in the window it was launched
+from.
+
+While an agent is shown, its pane really lives in your window, so closing that
+window or session (`kill-window`, `kill-session`) also ends Claude. Hide it with
+`prefix` + `y` first. Detaching is safe.
+
 ## Options
 
 Set any of these before the plugin loads (defaults shown):
@@ -133,6 +147,9 @@ set -g @claude_args           ''         # extra args appended to the command
 set -g @claude_session_prefix 'claude-'  # tmux session name prefix
 set -g @claude_popup_width     '90%'     # popup width
 set -g @claude_popup_height    '90%'     # popup height
+set -g @claude_display        'popup'    # 'popup', or 'split' to show agents as a pane
+set -g @claude_split_direction 'right'   # split mode: 'right', 'left', 'up' or 'down'
+set -g @claude_split_size     '50%'      # split mode: size of the agent pane
 set -g @claude_fzf_options    ''         # extra options passed to the fzf picker
 set -g @claude_picker_cache   'on'       # paint the picker's first frame from a cache
 set -g @claude_sort           'status'   # picker order: 'status' or 'recent'
