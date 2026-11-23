@@ -13,12 +13,15 @@
 # Rows come from agents.sh, which pairs each running Claude with the tmux pane it
 # occupies. Two kinds of row jump differently:
 #   dedicated  a Claude in a `claude-*` session this plugin launched — resumed in
-#              the popup, over the window it was launched from.
+#              the popup over the window it was launched from (or, in split
+#              mode, swapped into that window as a split).
 #   loose      a Claude running in any other pane — focused in place.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
 . "$DIR/helpers.sh"
+# shellcheck source=split.sh
+. "$DIR/split.sh"
 
 cache="${TMPDIR:-/tmp}/tmux-claude-agents-$(id -u).cache"
 
@@ -107,6 +110,19 @@ if [ "$kind" = loose ]; then
   fi
   tmux select-window -t "$pane" 2>/dev/null
   tmux select-pane -t "$pane" 2>/dev/null
+  exit 0
+fi
+
+if [ "$(get_tmux_option @claude_display 'popup')" = split ]; then
+  # Show it as a split in the window it was launched from, or the client's
+  # current window when that is unknown or gone.
+  origin=$(tmux show-options -qv -t "$session" @claude_origin 2>/dev/null)
+  [ -n "$origin" ] && ! tmux has-session -t "$origin" 2>/dev/null && origin=''
+  client=(${parent:+-c "$parent"})
+  [ -n "$origin" ] && tmux switch-client ${client[@]+"${client[@]}"} -t "$origin" 2>/dev/null
+  window=$(tmux display-message -p ${client[@]+"${client[@]}"} '#{window_id}')
+  split_hide "$window"
+  split_show "$pane" "$window"
   exit 0
 fi
 
